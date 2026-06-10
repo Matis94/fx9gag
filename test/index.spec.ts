@@ -1,12 +1,11 @@
 // test/index.spec.ts
-import { env, createExecutionContext, fetchMock, SELF } from 'cloudflare:test';
-import { describe, it, expect, beforeAll } from 'vitest';
+import { env, createExecutionContext, SELF } from 'cloudflare:test';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import worker from '../src/index';
 import videoResponse from './responses/9gag-video-response.json';
-import { generate9gagResponse } from '../src/9gag';
 
-beforeAll(() => {
-	fetchMock.disableNetConnect();
+afterEach(() => {
+	vi.restoreAllMocks();
 });
 
 // For now, you'll need to do something like this to get a correctly typed
@@ -14,9 +13,21 @@ beforeAll(() => {
 const IncomingRequest = Request<unknown, IncomingRequestCfProperties>;
 
 describe('9gag worker', () => {
-	it('responds with 404 for invalid URL', async () => {
+	it('redirects the root path to the GitHub repo', async () => {
 		// given
 		const request = new IncomingRequest('https://example.com');
+
+		// when
+		const response = await worker.fetch(request, env, createExecutionContext());
+
+		// then
+		expect(response.status).toBe(301);
+		expect(response.headers.get('Location')).toBe('https://github.com/kxalex/fx9gag');
+	});
+
+	it('responds with 404 for invalid URL', async () => {
+		// given
+		const request = new IncomingRequest('https://example.com/not-a-gag');
 
 		// when
 		const response = await worker.fetch(request, env, createExecutionContext());
@@ -39,12 +50,18 @@ describe('9gag worker', () => {
 	});
 
 	it('should fetch 9gag video post', async () => {
-		fetchMock.get('https://9gag.com')
-			.intercept({
-				path: '/gag/avygY5W',
-				headers: { 'User-Agent': 'TelegramBot (like TwitterBot)' }
-			})
-			.reply(200, videoResponse.response);
+		vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+			const request = new Request(input, init);
+			const url = new URL(request.url);
+			if (
+				url.origin === 'https://9gag.com' &&
+				url.pathname === '/gag/avygY5W' &&
+				request.headers.get('User-Agent') === 'TelegramBot (like TwitterBot)'
+			) {
+				return new Response(videoResponse.response, { status: 200 });
+			}
+			throw new Error(`Unexpected fetch: ${request.url}`);
+		});
 
 		const response = await SELF.fetch(new IncomingRequest('https://example.com/gag/avygY5W', {
 			headers: { 'User-Agent': 'TelegramBot (like TwitterBot)' },

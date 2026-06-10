@@ -22,7 +22,7 @@ export default {
 		if (url.pathname === '/') {
 			return Response.redirect('https://github.com/kxalex/fx9gag', 301);
 		} else if (!url.pathname.startsWith('/gag/')) {
-			return Response.redirect('https://9gag.com/' + url.pathname, 301);
+			return new Response('Invalid URL', { status: 404 });
 		}
 
 		const url9gag = replaceUrl(url);
