@@ -22,7 +22,7 @@ function parseJsonLd(message: string): SocialMediaPosting | undefined {
 }
 
 function parseConfigJson(message: string): GagPost | undefined {
-	const regex = /<script type="text\/javascript">window._config = JSON.parse\((.+)\);<\/script>/gs;
+	const regex = /<script type="text\/javascript">window._config = JSON.parse\((.+?)\);<\/script>/gs;
 	const matches = message.matchAll(regex);
 	const scripts = Array.from(matches, match => match[1]);
 	if (scripts.length === 0) {
