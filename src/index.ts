@@ -1,38 +1,73 @@
 import { replaceUrl } from './replaceUrl';
 import { generate9gagResponse } from './9gag';
 
-/**
- * Welcome to Cloudflare Workers! This is your first worker.
- *
- * - Run `npm run dev` in your terminal to start a development server
- * - Open a browser tab at http://localhost:8787/ to see your worker in action
- * - Run `npm run deploy` to publish your worker
- *
- * Bind resources to your worker in `wrangler.toml`. After adding bindings, a type definition for the
- * `Env` object can be regenerated with `npm run cf-typegen`.
- *
- * Learn more at https://developers.cloudflare.com/workers/
- */
-
 export default {
 	async fetch(request, env, ctx): Promise<Response> {
 		console.log('Request URL:', request.url);
+
 		const url = new URL(request.url);
 
+		// Strona główna workera
 		if (url.pathname === '/') {
-			return Response.redirect('https://github.com/kxalex/fx9gag', 301);
-		} else if (!url.pathname.startsWith('/gag/')) {
-			return new Response('Invalid URL', { status: 404 });
+			return new Response('fx9gag worker is running', {
+				status: 200,
+				headers: {
+					'Content-Type': 'text/plain; charset=UTF-8',
+				},
+			});
+		}
+
+		// Obsługujemy tylko linki /gag/...
+		if (!url.pathname.startsWith('/gag/')) {
+			return new Response('Invalid URL', {
+				status: 404,
+				headers: {
+					'Content-Type': 'text/plain; charset=UTF-8',
+				},
+			});
 		}
 
 		const url9gag = replaceUrl(url);
 
 		const userAgent = request.headers.get('User-Agent') || '';
+
 		console.log('User-Agent:', userAgent);
-		if (userAgent.includes('Telegram')) { // TelegramBot (like TwitterBot)
-			return generate9gagResponse(url9gag);
+		console.log('9GAG URL:', url9gag.toString());
+
+		const isDiscord =
+			userAgent.toLowerCase().includes('discordbot');
+
+		const isTelegram =
+			userAgent.toLowerCase().includes('telegram');
+
+		const isTwitter =
+			userAgent.toLowerCase().includes('twitterbot');
+
+		const isFacebook =
+			userAgent.toLowerCase().includes('facebookexternalhit');
+
+		const isSlack =
+			userAgent.toLowerCase().includes('slackbot');
+
+		// Boty odpowiedzialne za generowanie embedów dostają
+		// specjalny HTML z metatagami OpenGraph/video.
+		if (
+			isDiscord ||
+			isTelegram ||
+			isTwitter ||
+			isFacebook ||
+			isSlack
+		) {
+			try {
+				return await generate9gagResponse(url9gag);
+			} catch (error) {
+				console.error('generate9gagResponse failed:', error);
+
+				return Response.redirect(url9gag.toString(), 302);
+			}
 		}
 
-		return Response.redirect(url9gag.toString(), 301);
-	}
+		// Zwykły użytkownik po kliknięciu linku trafia na 9GAG.
+		return Response.redirect(url9gag.toString(), 302);
+	},
 } satisfies ExportedHandler<Env>;
