@@ -51,46 +51,86 @@ function parseConfigJson(message: string): GagPost | undefined {
 	}
 }
 
+function toNumber(value: unknown): number | undefined {
+	if (typeof value === 'number' && Number.isFinite(value)) {
+		return value;
+	}
+
+	if (typeof value === 'string') {
+		const normalized = value
+			.replace(/,/g, '')
+			.replace(/\s/g, '')
+			.trim();
+
+		const parsed = Number(normalized);
+
+		if (Number.isFinite(parsed)) {
+			return parsed;
+		}
+	}
+
+	return undefined;
+}
+
 function extractPostData(message: string): FxGagPost | null {
 	const gagPost = parseConfigJson(message);
 
 	if (gagPost) {
 		const postAny = gagPost as any;
+		const imagesAny = gagPost.images as any;
 
-		const points =
+		const points = toNumber(
 			postAny.upVoteCount ??
+			postAny.upvoteCount ??
+			postAny.upVotes ??
 			postAny.score ??
-			postAny.points ??
-			undefined;
+			postAny.points
+		);
 
-		const comments =
+		const comments = toNumber(
 			postAny.commentsCount ??
 			postAny.commentCount ??
+			postAny.comments ??
+			postAny.comment
+		);
+
+		const image700 = imagesAny.image700;
+		const image460 = imagesAny.image460;
+		const image460sv = imagesAny.image460sv;
+		const image460svwm = imagesAny.image460svwm;
+
+		const imageUrl =
+			image700?.url ??
+			image460?.url ??
+			image460sv?.url ??
+			'';
+
+		const videoUrl =
+			image460sv?.url ??
+			image460svwm?.url ??
 			undefined;
 
+		const width =
+			image460sv?.width ??
+			image700?.width ??
+			image460?.width ??
+			0;
+
+		const height =
+			image460sv?.height ??
+			image700?.height ??
+			image460?.height ??
+			0;
+
 		return {
-			type: gagPost.type === 'Animated' ? 'video' : 'image',
-
-			imageUrl:
-				gagPost.images.image700?.url ??
-				gagPost.images.image460?.url ??
-				'',
-
-			videoUrl:
-				gagPost.images.image460sv?.url ??
-				(gagPost.images as any).image460svwm?.url ??
-				undefined,
-
-			width:
-				gagPost.images.image700?.width ??
-				gagPost.images.image460?.width ??
-				0,
-
-			height:
-				gagPost.images.image700?.height ??
-				gagPost.images.image460?.height ??
-				0,
-
+			type:
+				gagPost.type === 'Animated' || videoUrl
+					? 'video'
+					: 'image',
+			imageUrl,
+			videoUrl,
+			width,
+			height,
 			points,
 			comments
 		};
@@ -114,15 +154,15 @@ function extractPostData(message: string): FxGagPost | null {
 }
 
 function createStatsDescription(post: FxGagPost): string | null {
-	if (typeof post.points === 'number' && typeof post.comments === 'number') {
+	if (post.points !== undefined && post.comments !== undefined) {
 		return `${post.points.toLocaleString('en-US')} points • ${post.comments.toLocaleString('en-US')} comments`;
 	}
 
-	if (typeof post.points === 'number') {
+	if (post.points !== undefined) {
 		return `${post.points.toLocaleString('en-US')} points`;
 	}
 
-	if (typeof post.comments === 'number') {
+	if (post.comments !== undefined) {
 		return `${post.comments.toLocaleString('en-US')} comments`;
 	}
 
@@ -175,6 +215,15 @@ export async function generate9gagResponse(url: URL): Promise<Response> {
 		);
 	}
 
+	console.log('Parsed post:', {
+		type: fxPost.type,
+		videoUrl: fxPost.videoUrl,
+		width: fxPost.width,
+		height: fxPost.height,
+		points: fxPost.points,
+		comments: fxPost.comments
+	});
+
 	const statsDescription = createStatsDescription(fxPost);
 
 	rewriter
@@ -215,14 +264,12 @@ export async function generate9gagResponse(url: URL): Promise<Response> {
 		const videoMetaAttributes = [
 			`<meta name="theme-color" content="#00a8fc" />`,
 
-			// Twitter
 			`<meta name="twitter:card" content="player" />`,
 			`<meta name="twitter:player:width" content="${fxPost.width}" />`,
 			`<meta name="twitter:player:height" content="${fxPost.height}" />`,
 			`<meta name="twitter:player:stream" content="${fxPost.videoUrl}" />`,
 			`<meta name="twitter:player:stream:content_type" content="video/mp4" />`,
 
-			// OpenGraph
 			`<meta property="og:type" content="video.other" />`,
 			`<meta property="og:video:width" content="${fxPost.width}" />`,
 			`<meta property="og:video:height" content="${fxPost.height}" />`,
