@@ -12,8 +12,6 @@ interface FxGagPost {
 	comments?: number;
 }
 
-// ld+json does not have video information on gifs,
-// but it'll be used if we have issues parsing config
 function parseJsonLd(message: string): SocialMediaPosting | undefined {
 	const regex = /<script type="application\/ld\+json">(.*?)<\/script>/gs;
 	const matches = message.matchAll(regex);
@@ -57,15 +55,59 @@ function toNumber(value: unknown): number | undefined {
 	}
 
 	if (typeof value === 'string') {
-		const normalized = value
-			.replace(/,/g, '')
-			.replace(/\s/g, '')
-			.trim();
-
-		const parsed = Number(normalized);
+		const parsed = Number(
+			value
+				.replace(/,/g, '')
+				.replace(/\s/g, '')
+				.trim()
+		);
 
 		if (Number.isFinite(parsed)) {
 			return parsed;
+		}
+	}
+
+	return undefined;
+}
+
+function findNumberByKeys(
+	obj: unknown,
+	keys: string[],
+	depth = 0
+): number | undefined {
+	if (depth > 8 || obj === null || typeof obj !== 'object') {
+		return undefined;
+	}
+
+	if (Array.isArray(obj)) {
+		for (const item of obj) {
+			const result = findNumberByKeys(item, keys, depth + 1);
+
+			if (result !== undefined) {
+				return result;
+			}
+		}
+
+		return undefined;
+	}
+
+	const record = obj as Record<string, unknown>;
+
+	for (const key of keys) {
+		if (key in record) {
+			const value = toNumber(record[key]);
+
+			if (value !== undefined) {
+				return value;
+			}
+		}
+	}
+
+	for (const value of Object.values(record)) {
+		const result = findNumberByKeys(value, keys, depth + 1);
+
+		if (result !== undefined) {
+			return result;
 		}
 	}
 
@@ -79,20 +121,23 @@ function extractPostData(message: string): FxGagPost | null {
 		const postAny = gagPost as any;
 		const imagesAny = gagPost.images as any;
 
-		const points = toNumber(
-			postAny.upVoteCount ??
-			postAny.upvoteCount ??
-			postAny.upVotes ??
-			postAny.score ??
-			postAny.points
-		);
+		const points =
+			toNumber(postAny.upVoteCount) ??
+			toNumber(postAny.upvoteCount) ??
+			findNumberByKeys(postAny, [
+				'upVoteCount',
+				'upvoteCount',
+				'upVotes',
+				'points'
+			]);
 
-		const comments = toNumber(
-			postAny.commentsCount ??
-			postAny.commentCount ??
-			postAny.comments ??
-			postAny.comment
-		);
+		const comments =
+			toNumber(postAny.commentsCount) ??
+			toNumber(postAny.commentCount) ??
+			findNumberByKeys(postAny, [
+				'commentsCount',
+				'commentCount'
+			]);
 
 		const image700 = imagesAny.image700;
 		const image460 = imagesAny.image460;
@@ -102,7 +147,6 @@ function extractPostData(message: string): FxGagPost | null {
 		const imageUrl =
 			image700?.url ??
 			image460?.url ??
-			image460sv?.url ??
 			'';
 
 		const videoUrl =
@@ -110,14 +154,14 @@ function extractPostData(message: string): FxGagPost | null {
 			image460svwm?.url ??
 			undefined;
 
+		// Wracamy do wymiarów image700,
+		// bo Discord lepiej układa player.
 		const width =
-			image460sv?.width ??
 			image700?.width ??
 			image460?.width ??
 			0;
 
 		const height =
-			image460sv?.height ??
 			image700?.height ??
 			image460?.height ??
 			0;
@@ -127,6 +171,7 @@ function extractPostData(message: string): FxGagPost | null {
 				gagPost.type === 'Animated' || videoUrl
 					? 'video'
 					: 'image',
+
 			imageUrl,
 			videoUrl,
 			width,
@@ -144,9 +189,7 @@ function extractPostData(message: string): FxGagPost | null {
 			imageUrl: metaAttributes.image,
 			videoUrl: metaAttributes.video?.contentUrl,
 			width: 0,
-			height: 0,
-			points: undefined,
-			comments: undefined
+			height: 0
 		};
 	}
 
@@ -181,7 +224,7 @@ export async function generate9gagResponse(url: URL): Promise<Response> {
 	const response = await fetch(url, {
 		cf: {
 			cacheEverything: true,
-			cacheTtl: 2_592_000 // 30 days
+			cacheTtl: 2_592_000
 		},
 		headers: {
 			'User-Agent': 'TelegramBot (like TwitterBot)'
@@ -217,11 +260,11 @@ export async function generate9gagResponse(url: URL): Promise<Response> {
 
 	console.log('Parsed post:', {
 		type: fxPost.type,
-		videoUrl: fxPost.videoUrl,
 		width: fxPost.width,
 		height: fxPost.height,
 		points: fxPost.points,
-		comments: fxPost.comments
+		comments: fxPost.comments,
+		videoUrl: fxPost.videoUrl
 	});
 
 	const statsDescription = createStatsDescription(fxPost);
@@ -236,29 +279,28 @@ export async function generate9gagResponse(url: URL): Promise<Response> {
 			element(element: Element): void {
 				element.setAttribute('content', 'FX9GAG');
 			}
-		})
-
-		.on('meta[property="og:description"]', {
-			element(element: Element): void {
-				if (statsDescription) {
-					element.setAttribute(
-						'content',
-						statsDescription
-					);
-				}
-			}
-		})
-
-		.on('meta[name="twitter:description"]', {
-			element(element: Element): void {
-				if (statsDescription) {
-					element.setAttribute(
-						'content',
-						statsDescription
-					);
-				}
-			}
 		});
+
+	if (statsDescription) {
+		rewriter
+			.on('meta[property="og:description"]', {
+				element(element: Element): void {
+					element.setAttribute(
+						'content',
+						statsDescription
+					);
+				}
+			})
+
+			.on('meta[name="twitter:description"]', {
+				element(element: Element): void {
+					element.setAttribute(
+						'content',
+						statsDescription
+					);
+				}
+			});
+	}
 
 	if (fxPost.type === 'video' && fxPost.videoUrl) {
 		const videoMetaAttributes = [
@@ -274,7 +316,6 @@ export async function generate9gagResponse(url: URL): Promise<Response> {
 			`<meta property="og:video:width" content="${fxPost.width}" />`,
 			`<meta property="og:video:height" content="${fxPost.height}" />`,
 			`<meta property="og:video" content="${fxPost.videoUrl}" />`,
-			`<meta property="og:video:url" content="${fxPost.videoUrl}" />`,
 			`<meta property="og:video:secure_url" content="${fxPost.videoUrl}" />`,
 			`<meta property="og:video:type" content="video/mp4" />`
 		];
