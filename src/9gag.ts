@@ -5,7 +5,7 @@ import GagPost = Gag.Post;
 interface FxGagPost {
 	type: 'image' | 'video';
 	imageUrl: string;
-	videoUrl: string | undefined;
+	videoUrl?: string;
 	width: number;
 	height: number;
 	points?: number;
@@ -41,7 +41,10 @@ function parseConfigJson(message: string): GagPost | undefined {
 	}
 
 	try {
-		const gagConfig = JSON.parse(JSON.parse(scripts[0])) as Gag.GagConfig;
+		const gagConfig = JSON.parse(
+			JSON.parse(scripts[0])
+		) as Gag.GagConfig;
+
 		return gagConfig.data.post;
 	} catch (error) {
 		console.error('Failed to parse window._config:', error);
@@ -95,10 +98,10 @@ function findNumberByKeys(
 
 	for (const key of keys) {
 		if (key in record) {
-			const value = toNumber(record[key]);
+			const result = toNumber(record[key]);
 
-			if (value !== undefined) {
-				return value;
+			if (result !== undefined) {
+				return result;
 			}
 		}
 	}
@@ -112,6 +115,14 @@ function findNumberByKeys(
 	}
 
 	return undefined;
+}
+
+function escapeHtml(value: string): string {
+	return value
+		.replace(/&/g, '&amp;')
+		.replace(/"/g, '&quot;')
+		.replace(/</g, '&lt;')
+		.replace(/>/g, '&gt;');
 }
 
 function extractPostData(message: string): FxGagPost | null {
@@ -154,14 +165,18 @@ function extractPostData(message: string): FxGagPost | null {
 			image460svwm?.url ??
 			undefined;
 
-		// Wracamy do wymiarów image700,
-		// bo Discord lepiej układa player.
+		/*
+		 * Dla video bierzemy rzeczywiste proporcje MP4.
+		 * W Twoim przykładzie jest to 460x817, czyli pionowe video.
+		 */
 		const width =
+			image460sv?.width ??
 			image700?.width ??
 			image460?.width ??
 			0;
 
 		const height =
+			image460sv?.height ??
 			image700?.height ??
 			image460?.height ??
 			0;
@@ -171,7 +186,6 @@ function extractPostData(message: string): FxGagPost | null {
 				gagPost.type === 'Animated' || videoUrl
 					? 'video'
 					: 'image',
-
 			imageUrl,
 			videoUrl,
 			width,
@@ -196,8 +210,11 @@ function extractPostData(message: string): FxGagPost | null {
 	return null;
 }
 
-function createStatsDescription(post: FxGagPost): string | null {
-	if (post.points !== undefined && post.comments !== undefined) {
+function createStatsDescription(post: FxGagPost): string {
+	if (
+		post.points !== undefined &&
+		post.comments !== undefined
+	) {
 		return `${post.points.toLocaleString('en-US')} points • ${post.comments.toLocaleString('en-US')} comments`;
 	}
 
@@ -209,7 +226,7 @@ function createStatsDescription(post: FxGagPost): string | null {
 		return `${post.comments.toLocaleString('en-US')} comments`;
 	}
 
-	return null;
+	return '9GAG';
 }
 
 const removeElement: HTMLRewriterElementContentHandlers = {
@@ -218,7 +235,9 @@ const removeElement: HTMLRewriterElementContentHandlers = {
 	}
 };
 
-export async function generate9gagResponse(url: URL): Promise<Response> {
+export async function generate9gagResponse(
+	url: URL
+): Promise<Response> {
 	console.log('Fetching 9gag:', url.toString());
 
 	const response = await fetch(url, {
@@ -244,7 +263,6 @@ export async function generate9gagResponse(url: URL): Promise<Response> {
 		);
 	}
 
-	const rewriter = new HTMLRewriter();
 	const message = await response.clone().text();
 
 	const fxPost = extractPostData(message);
@@ -260,20 +278,55 @@ export async function generate9gagResponse(url: URL): Promise<Response> {
 
 	console.log('Parsed post:', {
 		type: fxPost.type,
+		videoUrl: fxPost.videoUrl,
 		width: fxPost.width,
 		height: fxPost.height,
 		points: fxPost.points,
-		comments: fxPost.comments,
-		videoUrl: fxPost.videoUrl
+		comments: fxPost.comments
 	});
 
-	const statsDescription = createStatsDescription(fxPost);
+	const description = createStatsDescription(fxPost);
+	const escapedDescription = escapeHtml(description);
 
+	const rewriter = new HTMLRewriter();
+
+	/*
+	 * Usuwamy elementy, których boty Discorda nie potrzebują.
+	 */
 	rewriter
 		.on('script', removeElement)
 		.on('style', removeElement)
 		.on('link[rel=preload]', removeElement)
 		.on('div', removeElement)
+
+		/*
+		 * Usuwamy stare opisy 9GAG.
+		 * Dzięki temu Discord nie wybierze:
+		 * "Watch the video and join the fun..."
+		 */
+		.on('meta[property="og:description"]', removeElement)
+		.on('meta[name="twitter:description"]', removeElement)
+		.on('meta[property="twitter:description"]', removeElement)
+
+		/*
+		 * Usuwamy stare video meta, żeby Discord
+		 * nie miał kilku sprzecznych wersji.
+		 */
+		.on('meta[property="og:video"]', removeElement)
+		.on('meta[property="og:video:url"]', removeElement)
+		.on('meta[property="og:video:secure_url"]', removeElement)
+		.on('meta[property="og:video:type"]', removeElement)
+		.on('meta[property="og:video:width"]', removeElement)
+		.on('meta[property="og:video:height"]', removeElement)
+
+		.on('meta[name="twitter:player"]', removeElement)
+		.on('meta[name="twitter:player:width"]', removeElement)
+		.on('meta[name="twitter:player:height"]', removeElement)
+		.on('meta[name="twitter:player:stream"]', removeElement)
+		.on(
+			'meta[name="twitter:player:stream:content_type"]',
+			removeElement
+		)
 
 		.on('meta[property="og:site_name"]', {
 			element(element: Element): void {
@@ -281,53 +334,48 @@ export async function generate9gagResponse(url: URL): Promise<Response> {
 			}
 		});
 
-	if (statsDescription) {
-		rewriter
-			.on('meta[property="og:description"]', {
-				element(element: Element): void {
-					element.setAttribute(
-						'content',
-						statsDescription
-					);
-				}
-			})
+	/*
+	 * Najważniejsza zmiana:
+	 * dokładamy własne meta BEZPOŚREDNIO do HEAD.
+	 */
+	rewriter.on('head', {
+		element(element: Element): void {
+			let meta = `
+<meta name="theme-color" content="#00a8fc">
 
-			.on('meta[name="twitter:description"]', {
-				element(element: Element): void {
-					element.setAttribute(
-						'content',
-						statsDescription
-					);
-				}
-			});
-	}
+<meta property="og:description" content="${escapedDescription}">
+<meta name="twitter:description" content="${escapedDescription}">
+`;
 
-	if (fxPost.type === 'video' && fxPost.videoUrl) {
-		const videoMetaAttributes = [
-			`<meta name="theme-color" content="#00a8fc" />`,
+			if (
+				fxPost.type === 'video' &&
+				fxPost.videoUrl
+			) {
+				const videoUrl = escapeHtml(fxPost.videoUrl);
 
-			`<meta name="twitter:card" content="player" />`,
-			`<meta name="twitter:player:width" content="${fxPost.width}" />`,
-			`<meta name="twitter:player:height" content="${fxPost.height}" />`,
-			`<meta name="twitter:player:stream" content="${fxPost.videoUrl}" />`,
-			`<meta name="twitter:player:stream:content_type" content="video/mp4" />`,
+				meta += `
+<meta property="og:type" content="video.other">
 
-			`<meta property="og:type" content="video.other" />`,
-			`<meta property="og:video:width" content="${fxPost.width}" />`,
-			`<meta property="og:video:height" content="${fxPost.height}" />`,
-			`<meta property="og:video" content="${fxPost.videoUrl}" />`,
-			`<meta property="og:video:secure_url" content="${fxPost.videoUrl}" />`,
-			`<meta property="og:video:type" content="video/mp4" />`
-		];
+<meta property="og:video" content="${videoUrl}">
+<meta property="og:video:url" content="${videoUrl}">
+<meta property="og:video:secure_url" content="${videoUrl}">
+<meta property="og:video:type" content="video/mp4">
+<meta property="og:video:width" content="${fxPost.width}">
+<meta property="og:video:height" content="${fxPost.height}">
 
-		rewriter.on('meta[property="og:image"]', {
-			element(element: Element): void {
-				videoMetaAttributes.forEach((meta) => {
-					element.after(meta, { html: true });
-				});
+<meta name="twitter:card" content="player">
+<meta name="twitter:player:width" content="${fxPost.width}">
+<meta name="twitter:player:height" content="${fxPost.height}">
+<meta name="twitter:player:stream" content="${videoUrl}">
+<meta name="twitter:player:stream:content_type" content="video/mp4">
+`;
 			}
-		});
-	}
+
+			element.append(meta, {
+				html: true
+			});
+		}
+	});
 
 	return rewriter.transform(response);
 }
